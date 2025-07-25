@@ -60,6 +60,10 @@
 #include <sys/cpuset.h>
 #endif
 
+#if !defined (__APPLE__) && !defined (_WIN32)
+#include <gio/gio.h>
+#endif
+
 #include "edit_distance.h"
 
 using namespace std;
@@ -1028,4 +1032,84 @@ int platformAwareUnlink(const char* filename) {
 	#else
 		return unlink(filename);
 	#endif
+}
+
+struct ContinuedExecutionPriv
+{
+#if !defined (__APPLE__) && !defined (_WIN32)
+  GThread *thread {};
+  GCancellable *cancellable;
+  const char *reason;
+#endif
+};
+
+#if !defined (__APPLE__) && !defined (_WIN32) && defined (HAVE_GIO2)
+
+static gpointer
+thread_dbus_for_continued_execution(gpointer data)
+{
+    ContinuedExecutionPriv *priv = (ContinuedExecutionPriv*) data;
+    GDBusProxy *proxy;
+    GError *error = NULL;
+    GVariant *parameters = NULL;
+    GVariant *return_value = NULL;
+    int fd = -1;
+
+    /* https://systemd.io/INHIBITOR_LOCKS/ */
+
+    proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SESSION,
+                                           G_DBUS_PROXY_FLAGS_NONE,
+                                           NULL, /* GDBusInterfaceInfo */
+                                           "org.freedesktop.login1",
+                                           "/org/freedesktop/login1",
+                                           "org.freedesktop.login1.Manager",
+                                           data->cancellable,
+                                           &error);
+    if (!proxy) {
+        return NULL;
+    }
+
+    parameters = g_variant_new ("(ssss)",
+                                "sleep",
+                                "Ninja Build",
+                                priv->reason ? priv->reason : "Build in progress",
+                                "block-weak");
+
+    return_value = g_dbus_proxy_call_sync(proxy, "Inhibit", parameters, -1,
+                                          data->cancellable, &error);
+    if (!return_value) {
+        Warning("Could not inhibit suspend / sleep");
+    }
+}
+
+#endif
+
+ContinuedExecution::ContinuedExecution(const char *reason)
+{
+#if !defined (__APPLE__) && !defined (_WIN32)
+  priv = new ContinuedExecutionPriv();
+
+  priv->reason = g_strdup (reason);
+  priv->cancellable = g_cancellable_new ();
+
+  /* We do all work on a separate thread. We might fetch all
+   * GPollFDs and pass them to the poll() used by ninja, but
+   * it complicates the design */
+  priv->thread = g_thread_new("GDBus Inhibitor Lock", thread_dbus_for_continued_execution, priv);
+#endif
+}
+
+ContinuedExecution::~ContinuedExecution()
+{
+#if !defined (__APPLE__) && !defined (_WIN32)
+  /* Signal condvar? Or just exit? */
+  g_cancellable_cancel (priv->cancellable);
+  g_thread_join (priv->thread);
+
+  g_thread_unref (priv->thread);
+  g_free (priv->reason);
+  g_object_unref (priv->cancellable);
+
+  delete priv;
+#endif
 }

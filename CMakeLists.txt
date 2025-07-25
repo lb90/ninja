@@ -185,6 +185,12 @@ else()
 		set_source_files_properties(src/getopt.c PROPERTIES LANGUAGE CXX)
 	endif()
 
+	if (NOT APPLE)
+		find_package(PkgConfig REQUIRED)
+		pkg_check_modules(GIO2 REQUIRED IMPORTED_TARGET gio-2.0)
+		target_link_libraries(libninja PRIVATE PkgConfig::GIO2)
+	endif()
+
 	# Needed for perfstat_cpu_total
 	if(CMAKE_SYSTEM_NAME STREQUAL "AIX")
 		target_link_libraries(libninja PUBLIC "-lperfstat")

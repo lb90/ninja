@@ -118,6 +118,16 @@ class Platform(object):
     def can_rebuild_in_place(self) -> bool:
         return not (self.is_windows() or self.is_aix())
 
+    def run_pkg_config(self, args) -> str:
+        try:
+            ret = subprocess.run(['pkg-config'] + args,
+                                 capture_output = True,
+                                 check = True)
+            
+        except :
+            print('ERROR: pkg-config')
+            sys.exit(1)
+
 class Bootstrap:
     """API shim for ninja_syntax.Writer that instead runs the commands.
 
@@ -245,6 +255,10 @@ if options.host:
     host = Platform(options.host)
 else:
     host = platform
+
+# TODO: is_linux() or?
+gio2_dep_cflags = '' if not platform.is_linux() else platform.run_pkg_config('--cflags', 'gio-2.0')
+gio2_dep_libs = '' if not platform.is_linux() else platform.run_pkg_config('--libs', 'gio-2.0')
 
 BUILD_FILENAME = 'build.ninja'
 ninja_writer = ninja_syntax.Writer(open(BUILD_FILENAME, 'w'))
@@ -420,6 +434,12 @@ if platform.supports_ppoll() and not options.force_pselect:
     cflags.append('-DUSE_PPOLL')
 if platform.supports_ninja_browse():
     cflags.append('-DNINJA_HAVE_BROWSE')
+
+# TODO: is_linux() or?
+if platform.is_linux():
+    # TODO: should we split multiple arguments?
+    cflags.append(gio2_dep_cflags)
+    ldflags.append(gio2_dep_libs)
 
 # Search for generated headers relative to build dir.
 cflags.append('-I.')
